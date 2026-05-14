@@ -1,0 +1,65 @@
+  {  
+    "id": "clawo",
+    "activation": {
+      "onStartup": false
+    },
+    "enabledByDefault": false,
+    "providers": ["clawo"],
+    "providerCatalogEntry": "./provider-discovery.ts",
+    "modelCatalog": {
+      "providers": {
+        "clawo": {
+          "baseUrl": "http://127.0.0.1:18796/v1",
+          "api": "openai-completions",
+          "models": [
+            {
+              "id": "claude-opus-4-7",
+              "name": "Claude Opus 4.7 (via clawo)",
+              "input": ["text"],
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+              "compat": { "supportsUsageInStreaming": true, "maxTokensField": "max_tokens" }
+            },
+            {
+              "id": "claude-sonnet-4-7",
+              "name": "Claude Sonnet 4.7 (via clawo)",
+              "input": ["text"],
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+              "compat": { "supportsUsageInStreaming": true, "maxTokensField": "max_tokens" }
+            },
+            {
+              "id": "claude-opus-4-6",
+              "name": "Claude Opus 4.6 (via clawo)",
+              "input": ["text"],
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+              "compat": { "supportsUsageInStreaming": true, "maxTokensField": "max_tokens" }
+            },
+            {
+              "id": "claude-sonnet-4-6",
+              "name": "Claude Sonnet 4.6 (via clawo)",
+              "input": ["text"],
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+              "compat": { "supportsUsageInStreaming": true, "maxTokensField": "max_tokens" }
+            },
+            {
+              "id": "claude-haiku-4-5",
+              "name": "Claude Haiku 4.5 (via clawo)",
+              "input": ["text"],
+              "contextWindow": 200000,
+              "maxTokens": 8192,
+              "compat": { "supportsUsageInStreaming": true, "maxTokensField": "max_tokens" }
+            }
+          ]
+        }
+      }, 
+      "discovery": { "clawo": "static" }
+    },
+    "configSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    }
+  }
