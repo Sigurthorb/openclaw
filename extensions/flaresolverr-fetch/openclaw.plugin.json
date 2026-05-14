@@ -1,0 +1,38 @@
+{
+  "id": "flaresolverr-fetch",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Flaresolverr Fetch",
+  "description": "Fetch URLs through a flaresolverr instance to bypass Cloudflare anti-bot challenges. Self-hosted endpoints only.",
+  "uiHints": {
+    "endpoint": {
+      "label": "Flaresolverr Endpoint",
+      "help": "Base URL of the flaresolverr instance (e.g. http://flaresolverr:8191). Must target a private/internal network."
+    },
+    "defaultTimeoutSeconds": {
+      "label": "Default Request Timeout (s)",
+      "help": "Default per-request timeout passed to flaresolverr."
+    }
+  },
+  "contracts": {
+    "tools": ["flaresolverr_fetch"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string"
+      },
+      "defaultTimeoutSeconds": {
+        "type": "number",
+        "minimum": 1
+      },
+      "defaultMaxChars": {
+        "type": "number",
+        "minimum": 100
+      }
+    }
+  }
+}
