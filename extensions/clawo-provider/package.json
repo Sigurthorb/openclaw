@@ -1,12 +1,12 @@
-  { 
-    "name": "@openclaw/clawo-provider",
-    "version": "0.1.0",
-    "private": true,
-    "description": "OpenClaw provider routing through claw-orchestrator to Claude Code (Max subscription)",
-    "type": "module",
-    "openclaw": {
-      "extensions": [
-        "./index.ts"
-      ]
-    }
+{ 
+  "name": "@openclaw/clawo-provider",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw provider routing through claw-orchestrator to Claude Code (Max subscription)",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
   }
+}
