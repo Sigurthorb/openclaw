@@ -271,6 +271,8 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
+RUN npm install -g @anthropic-ai/claude-code @enderfga/claw-orchestrator
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
@@ -294,3 +296,4 @@ HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["tini", "-s", "--"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+  
