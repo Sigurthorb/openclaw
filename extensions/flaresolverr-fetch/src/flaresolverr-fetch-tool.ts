@@ -22,10 +22,18 @@ const FlaresolverrFetchToolSchema = Type.Object(
         minimum: 100,
       }),
     ),
-    timeoutSeconds: Type.Optional(
+    timeoutMs: Type.Optional(
       Type.Number({
-        description: "Timeout in seconds for the flaresolverr request.",
-        minimum: 1,
+        description: "Timeout in milliseconds for the flaresolverr request.",
+        minimum: 1000,
+      }),
+    ),
+    waitMs: Type.Optional(
+      Type.Number({
+        description:
+          "Milliseconds to wait after the page loads (and any Cloudflare challenge is solved) before capturing HTML. Use 3000-6000 for JS-hydrated pages that initially render a skeleton. Capped at 15000.",
+        minimum: 0,
+        maximum: 15000,
       }),
     ),
   },
@@ -44,9 +52,8 @@ export function createFlaresolverrFetchTool(api: OpenClawPluginApi) {
       const extractMode =
         readStringParam(rawParams, "extractMode") === "text" ? "text" : "html";
       const maxChars = readNumberParam(rawParams, "maxChars", { integer: true });
-      const timeoutSeconds = readNumberParam(rawParams, "timeoutSeconds", {
-        integer: true,
-      });
+      const timeoutMs = readNumberParam(rawParams, "timeoutMs", { integer: true });
+      const waitMs = readNumberParam(rawParams, "waitMs", { integer: true });
 
       return jsonResult(
         await runFlaresolverrFetch({
@@ -54,7 +61,8 @@ export function createFlaresolverrFetchTool(api: OpenClawPluginApi) {
           url,
           extractMode,
           maxChars,
-          timeoutSeconds,
+          timeoutMs,
+          waitMs,
         }),
       );
     },

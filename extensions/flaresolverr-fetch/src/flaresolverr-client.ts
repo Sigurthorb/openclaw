@@ -23,8 +23,25 @@ export type FlaresolverrFetchParams = {
   url: string;
   extractMode: "html" | "text";
   maxChars?: number;
-  timeoutSeconds?: number;
+  timeoutMs?: number;
+  waitMs?: number;
 };
+
+const MAX_WAIT_MS = 15_000;
+
+function clampWaitMs(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.min(Math.floor(value), MAX_WAIT_MS);
+}
+
+function msToSecondsOrUndefined(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value / 1000));
+}
 
 const FLARESOLVERR_PRIVATE_ERROR =
   "Flaresolverr endpoint must target a private or internal self-hosted address.";
@@ -137,15 +154,22 @@ export async function runFlaresolverrFetch(
 
   const endpointRaw = resolveFlaresolverrEndpoint(params.cfg);
   const endpoint = await validateFlaresolverrEndpoint(endpointRaw);
-  const timeoutSeconds = resolveFlaresolverrTimeoutSeconds(params.cfg, params.timeoutSeconds);
+  const timeoutSeconds = resolveFlaresolverrTimeoutSeconds(
+    params.cfg,
+    msToSecondsOrUndefined(params.timeoutMs),
+  );
   const maxChars = resolveFlaresolverrMaxChars(params.cfg, params.maxChars);
 
+  const waitMs = clampWaitMs(params.waitMs);
   const requestUrl = buildV1Url(endpoint);
-  const body = {
+  const body: Record<string, unknown> = {
     cmd: "request.get",
     url: params.url,
     maxTimeout: timeoutSeconds * 1000,
   };
+  if (waitMs !== undefined) {
+    body.waitInSeconds = Math.max(1, Math.ceil(waitMs / 1000));
+  }
 
   const start = Date.now();
   const envelope = await withSelfHostedWebToolsEndpoint(
