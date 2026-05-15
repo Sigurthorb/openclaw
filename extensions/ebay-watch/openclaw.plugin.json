@@ -1,0 +1,39 @@
+{
+  "id": "ebay-watch",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "eBay Watch",
+  "description": "Search eBay listings through a self-hosted flaresolverr instance and return structured deal candidates.",
+  "uiHints": {
+    "flaresolverrEndpoint": {
+      "label": "Flaresolverr Endpoint",
+      "help": "Base URL of the flaresolverr instance (e.g. http://flaresolverr:8191). Must target a private/internal network."
+    },
+    "defaultMaxResults": {
+      "label": "Default Max Results",
+      "help": "Default number of listings to return per search."
+    }
+  },
+  "contracts": {
+    "tools": ["ebay_search"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "flaresolverrEndpoint": {
+        "type": "string"
+      },
+      "defaultMaxResults": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 100
+      },
+      "defaultTimeoutSeconds": {
+        "type": "number",
+        "minimum": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/ebay-watch-plugin",
+  "version": "2026.5.14-beta.1",
+  "private": true,
+  "description": "OpenClaw eBay search tool. Returns structured listings via flaresolverr.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

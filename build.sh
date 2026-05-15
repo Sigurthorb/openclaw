@@ -13,7 +13,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
 IMAGE_TAG="openclaw:clawo"
-EXTENSIONS="clawo-provider,flaresolverr-fetch,browser,searxng,telegram,memory-lancedb,ollama"
+EXTENSIONS="clawo-provider,flaresolverr-fetch,ebay-watch,browser,searxng,telegram,memory-lancedb,ollama"
 INSTALL_BROWSER="1"
 NETWORK="host"
 DOCKER_ARGS=()
