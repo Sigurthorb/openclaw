@@ -146,6 +146,18 @@ type FlaresolverrEnvelope = {
   solution?: { url?: string; status?: number; response?: string };
 };
 
+// Heuristic: a real eBay /sch response always contains either listing-card
+// markup or the canonical "no matches" copy. Anything else is almost certainly
+// a bot interstitial that FlareSolverr accepted as solved. We've seen this
+// produce a sub-2s response with no listings; retrying once usually recovers.
+function looksLikeRealSearchResultsPage(html: string): boolean {
+  if (!html) return false;
+  if (html.includes("s-card s-card--horizontal")) return true;
+  if (/No\s+exact\s+matches\s+found/i.test(html)) return true;
+  if (/0\s+results?\s+for/i.test(html)) return true;
+  return false;
+}
+
 export type EbaySearchParams = {
   cfg?: OpenClawConfig;
   query: string;
@@ -196,33 +208,55 @@ export async function runEbaySearch(params: EbaySearchParams): Promise<EbaySearc
     maxTimeout: timeoutSeconds * 1000,
   };
 
-  const start = Date.now();
-  const envelope = await withSelfHostedWebToolsEndpoint(
-    {
-      url: requestUrl,
-      timeoutSeconds,
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+  async function fetchOnce(): Promise<FlaresolverrEnvelope> {
+    return await withSelfHostedWebToolsEndpoint(
+      {
+        url: requestUrl,
+        timeoutSeconds,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
       },
-    },
-    async ({ response }) => {
-      if (!response.ok) {
-        const text = await readResponseText(response, { maxBytes: 64_000 });
-        const detail = wrapWebContent((text.text || response.statusText).slice(0, 1_000), "web_fetch");
-        throw new Error(`Flaresolverr error (${response.status}): ${detail}`);
-      }
-      return (await response.json()) as FlaresolverrEnvelope;
-    },
-  );
+      async ({ response }) => {
+        if (!response.ok) {
+          const text = await readResponseText(response, { maxBytes: 64_000 });
+          const detail = wrapWebContent(
+            (text.text || response.statusText).slice(0, 1_000),
+            "web_fetch",
+          );
+          throw new Error(`Flaresolverr error (${response.status}): ${detail}`);
+        }
+        return (await response.json()) as FlaresolverrEnvelope;
+      },
+    );
+  }
+
+  const start = Date.now();
+  let envelope = await fetchOnce();
 
   if (envelope.status !== "ok" || !envelope.solution) {
     const reason = typeof envelope.message === "string" ? envelope.message : "unknown failure";
     throw new Error(`Flaresolverr returned non-ok status: ${wrapWebContent(reason, "web_fetch")}`);
   }
 
-  const html = typeof envelope.solution.response === "string" ? envelope.solution.response : "";
+  let html = typeof envelope.solution.response === "string" ? envelope.solution.response : "";
+
+  if (!looksLikeRealSearchResultsPage(html)) {
+    envelope = await fetchOnce();
+    if (envelope.status !== "ok" || !envelope.solution) {
+      const reason = typeof envelope.message === "string" ? envelope.message : "unknown failure";
+      throw new Error(`Flaresolverr returned non-ok status: ${wrapWebContent(reason, "web_fetch")}`);
+    }
+    html = typeof envelope.solution.response === "string" ? envelope.solution.response : "";
+    if (!looksLikeRealSearchResultsPage(html)) {
+      throw new Error(
+        "eBay returned a non-listing page (likely bot interstitial). FlareSolverr accepted it but no s-card markup or 'no matches' copy was present after one retry.",
+      );
+    }
+  }
+
   const listings = html ? parseEbaySearchListings(html, maxResults) : [];
 
   return {

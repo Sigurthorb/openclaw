@@ -120,6 +120,41 @@ docker logs openclaw-gateway 2>&1 | grep -iE "ebay_search|ebay-watch" | tail -10
   Zero matches = selector class changed. Re-derive in
   `extensions/ebay-watch/src/ebay-search-parser.ts`.
 
+## ⚠ Reality check: eBay is on Akamai, not Cloudflare
+
+FlareSolverr bypasses **Cloudflare**. eBay's `/sch` endpoint is behind
+**Akamai Bot Manager** (responses come from `errors.edgesuite.net` when
+blocked). FlareSolverr does not defeat Akamai — it gets through only when
+Akamai's session leniency lets a fresh chromedriver context fly under the
+velocity threshold. Local testing showed:
+
+- First few requests in a window: succeed, return real listings.
+- Burst of ~3 requests in 30s from the same egress IP: Akamai blocks the IP
+  with `Access Denied`. Cooldown observed ~30–60 minutes.
+
+What this means for the bot in practice:
+
+- **On-demand use (the intended pattern)** — usually fine. You DM the agent,
+  it does one search, Akamai is fine with it.
+- **Frequent or scripted polling** — will get the homelab IP blacklisted.
+  Don't add cron. The "when I ask for it" policy chosen earlier is exactly
+  the right call.
+- **If you start seeing the tool throw `non-listing page (likely bot
+  interstitial)`** — you're rate-limited. Wait ~30 min and try again. Don't
+  retry in a tight loop; the tool already retries once internally.
+
+If this becomes a real problem and you want a robust eBay watcher:
+
+1. eBay's official **Browse API** (developer.ebay.com) — needs an OAuth app,
+   but is rate-limited generously and has no bot-detection issues. Right
+   answer for "real product."
+2. A residential proxy in front of FlareSolverr — costs money, ToS-grey.
+3. Run from a different egress (mobile-tethered, VPN exit, friend's IP) —
+   moves the problem rather than solves it.
+
+The plugin code itself is fine. The infrastructure under it is the
+constraint.
+
 ## 6. What was deliberately NOT built
 
 - No bidding. No buy-it-now. No authenticated session. No Playwright. No
