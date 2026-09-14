@@ -421,6 +421,7 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
 
 RUN npm install -g @anthropic-ai/claude-code@2.1.142 @openai/codex@0.154.0 @enderfga/claw-orchestrator@4.1.0 && \
     node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs"
+RUN npm config set allow-scripts=re2 --location=global && cd "$(npm root -g)/@enderfga/claw-orchestrator" && npm rebuild re2 && node -e "require(\"re2\"); console.log(\"re2 ok\")"
 
 ENV NODE_ENV=production
 
