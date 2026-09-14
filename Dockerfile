@@ -419,7 +419,8 @@ RUN install -d -m 0755 -o node -g node /home/node/.config && \
     stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755' && \
     stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
 
-RUN npm install -g @anthropic-ai/claude-code@2.1.142 @openai/codex@0.154.0 @enderfga/claw-orchestrator@4.1.0
+RUN npm install -g @anthropic-ai/claude-code@2.1.142 @openai/codex@0.154.0 @enderfga/claw-orchestrator@4.1.0 && \
+    node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs"
 
 ENV NODE_ENV=production
 
