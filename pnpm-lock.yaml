@@ -493,6 +493,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/clawo-provider: {}
+
   extensions/clickclack:
     dependencies:
       ws:
@@ -685,6 +687,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/ebay-watch: {}
+
   extensions/elevenlabs:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -754,6 +758,8 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+
+  extensions/flaresolverr-fetch: {}
 
   extensions/github-copilot:
     dependencies:

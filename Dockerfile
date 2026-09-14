@@ -271,7 +271,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
-RUN npm install -g @anthropic-ai/claude-code @enderfga/claw-orchestrator
+RUN npm install -g @anthropic-ai/claude-code@2.1.142 @openai/codex@0.154.0 @enderfga/claw-orchestrator@4.1.0
 
 ENV NODE_ENV=production
 
