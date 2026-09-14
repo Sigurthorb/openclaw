@@ -1,8 +1,10 @@
+// Covers heartbeat model override routing.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
+  heartbeatTestConfig,
   seedSessionStore,
   type HeartbeatReplySpy,
   withTempHeartbeatSandbox,
@@ -71,6 +73,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     sessionKey: string;
     replySpy: HeartbeatReplySpy;
     agentId?: string;
+    heartbeat?: Parameters<typeof runHeartbeatOnce>[0]["heartbeat"];
+    source?: Parameters<typeof runHeartbeatOnce>[0]["source"];
   }) {
     await params.seedSession(params.sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
 
@@ -79,6 +83,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     await runHeartbeatOnce({
       cfg: params.cfg,
       agentId: params.agentId,
+      heartbeat: params.heartbeat,
+      source: params.source,
       deps: {
         getReplyFromConfig: params.replySpy,
         getQueueSize: () => 0,
@@ -96,22 +102,25 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   }
 
   async function runDefaultsHeartbeat(params: {
+    every?: string;
+    defaultTimeoutSeconds?: number;
     model?: string;
-    suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
     lightContext?: boolean;
     isolatedSession?: boolean;
+    heartbeat?: Parameters<typeof runHeartbeatOnce>[0]["heartbeat"];
+    source?: Parameters<typeof runHeartbeatOnce>[0]["source"];
   }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: tmpDir,
+            timeoutSeconds: params.defaultTimeoutSeconds,
             heartbeat: {
-              every: "5m",
+              every: params.every ?? "5m",
               target: "whatsapp",
               model: params.model,
-              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               timeoutSeconds: params.timeoutSeconds,
               lightContext: params.lightContext,
               isolatedSession: params.isolatedSession,
@@ -127,6 +136,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         cfg,
         sessionKey,
         replySpy,
+        heartbeat: params.heartbeat,
+        source: params.source,
       });
       return result.opts;
     });
@@ -189,15 +200,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
       heartbeatModelOverride: "ollama/llama3.2:1b",
-      suppressToolErrorWarnings: false,
-    });
-  });
-
-  it("passes suppressToolErrorWarnings when configured", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
-    expectReplyOptions(replyOpts, {
-      isHeartbeat: true,
-      suppressToolErrorWarnings: true,
     });
   });
 
@@ -208,6 +210,47 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       timeoutOverrideSeconds: 45,
     });
   });
+
+  it("keeps configured run options when a direct wake overrides only the destination", async () => {
+    const replyOpts = await runDefaultsHeartbeat({
+      timeoutSeconds: 45,
+      lightContext: true,
+      heartbeat: { target: "last" },
+      source: "manual",
+    });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 45,
+      bootstrapContextMode: "lightweight",
+    });
+  });
+
+  it("uses heartbeat cadence as the default reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({});
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 300,
+    });
+  });
+
+  it("caps the default heartbeat reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ every: "30m" });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 600,
+    });
+  });
+
+  it.each([0, 60])(
+    "preserves explicit default agent timeout %d for heartbeat runs",
+    async (defaultTimeoutSeconds) => {
+      const replyOpts = await runDefaultsHeartbeat({ defaultTimeoutSeconds, every: "30m" });
+      expectReplyOptions(replyOpts, {
+        isHeartbeat: true,
+        timeoutOverrideSeconds: defaultTimeoutSeconds,
+      });
+    },
+  );
 
   it("passes bootstrapContextMode when heartbeat lightContext is enabled", async () => {
     const replyOpts = await runDefaultsHeartbeat({ lightContext: true });
@@ -248,19 +291,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
   it("uses main session key when isolatedSession is not set", async () => {
     await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "whatsapp",
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
       const sessionKey = resolveMainSessionKey(cfg);
       const result = await runHeartbeatWithSeed({
         seedSession,

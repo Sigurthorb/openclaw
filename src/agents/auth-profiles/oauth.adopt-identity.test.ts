@@ -1,8 +1,15 @@
+/**
+ * Tests OAuth adoption identity safety.
+ * Ensures sub-agent/main-agent credential adoption only happens when identity
+ * evidence allows the copy.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { oauthCred } from "./credential-fixtures.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
@@ -10,18 +17,16 @@ import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
   createOAuthTestTempRoot,
-  oauthCred,
+  readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
   resetOAuthProviderRuntimeMocks,
   storeWith,
 } from "./oauth-test-utils.js";
-import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./store.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const {
@@ -29,18 +34,15 @@ const {
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
-function expectPersistedOpenAICodexProfileWithoutInlineTokens(
+function expectPersistedOpenAICodexProfile(
   credential: AuthProfileStore["profiles"][string],
   metadata: Record<string, unknown> = {},
 ): void {
   expect(credential?.type).toBe("oauth");
-  expect(credential?.provider).toBe("openai-codex");
+  expect(credential?.provider).toBe("openai");
   for (const [key, value] of Object.entries(metadata)) {
     expect((credential as Record<string, unknown> | undefined)?.[key]).toEqual(value);
   }
-  expect(credential).not.toHaveProperty("access");
-  expect(credential).not.toHaveProperty("refresh");
-  expect(credential).not.toHaveProperty("idToken");
 }
 
 // Cross-account-leak defense-in-depth: each adopt site in oauth.ts calls the
@@ -48,9 +50,9 @@ function expectPersistedOpenAICodexProfileWithoutInlineTokens(
 // sub-agent store. Unit tests cover policy variants; this suite proves each
 // production branch refuses a mismatched accountId.
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
-  getOAuthProviders: () => [{ id: "openai-codex" }, { id: "anthropic" }],
+  getOAuthProviders: () => [{ id: "openai" }, { id: "anthropic" }],
 }));
 
 describe("OAuth credential adoption is identity-gated", () => {
@@ -70,10 +72,10 @@ describe("OAuth credential adoption is identity-gated", () => {
       formatProviderAuthProfileApiKeyWithPluginMock,
     });
     clearRuntimeAuthProfileStoreSnapshots();
+    resetOAuthRefreshQueuesForTest();
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
     mainAgentDir = await createOAuthMainAgentDir(caseRoot);
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
@@ -91,8 +93,8 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Scenario: sub-agent starts with a still-valid OAuth cred (so no
     // refresh is triggered), but main holds an even fresher cred for a
     // different account. The pre-refresh adopt must refuse.
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const subExpiry = Date.now() + 10 * 60 * 1000;
     const mainFresher = Date.now() + 60 * 60 * 1000;
 
@@ -135,14 +137,17 @@ describe("OAuth credential adoption is identity-gated", () => {
     expect(result?.apiKey).toBe("sub-own-access");
 
     // Sub-agent store must NOT have been overwritten with main's foreign cred.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfileWithoutInlineTokens(subRaw.profiles[profileId], {
-      accountId: "acct-sub",
-      expires: subExpiry,
-    });
-    expect(JSON.stringify(subRaw)).not.toContain("sub-own-access");
+    const subRaw = readAuthProfileStoreForTest(subAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
+      {
+        access: "sub-own-access",
+        refresh: "sub-own-refresh",
+        accountId: "acct-sub",
+        expires: subExpiry,
+      },
+    );
+    expect(JSON.stringify(subRaw)).not.toContain("main-foreign-access");
   });
 
   it("inside-the-lock main adoption refuses across accountId mismatch and proceeds to own refresh", async () => {
@@ -150,8 +155,8 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Inside the lock, main holds FRESH creds for a DIFFERENT account. The
     // inside-lock adopt branch must refuse and fall through to the HTTP
     // refresh path using the sub-agent's own refresh token.
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
 
     const subAgentDir = path.join(tempRoot, "agents", "sub-insidelock", "agent");
@@ -208,14 +213,16 @@ describe("OAuth credential adoption is identity-gated", () => {
 
     // Main must still hold its foreign cred, untouched (mirror would also
     // refuse because of identity mismatch).
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfileWithoutInlineTokens(mainRaw.profiles[profileId], {
-      accountId: "acct-other",
-      expires: freshExpiry,
-    });
-    expect(JSON.stringify(mainRaw)).not.toContain("main-foreign-access");
+    const mainRaw = readAuthProfileStoreForTest(mainAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(mainRaw.profiles[profileId], "mainRaw.profiles[profileId] test invariant"),
+      {
+        access: "main-foreign-access",
+        refresh: "main-foreign-refresh",
+        accountId: "acct-other",
+        expires: freshExpiry,
+      },
+    );
   });
 
   it("catch-block main-inherit refuses across accountId mismatch and surfaces the original error", async () => {
@@ -223,8 +230,8 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Main has fresh creds for a DIFFERENT account. The catch-block
     // main-inherit fallback must refuse to adopt and let the original
     // error propagate (wrapped).
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
 
     const subAgentDir = path.join(tempRoot, "agents", "sub-catch-refuse", "agent");
@@ -282,15 +289,21 @@ describe("OAuth credential adoption is identity-gated", () => {
         profileId,
         agentDir: subAgentDir,
       }),
-    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+    ).rejects.toThrow(/OAuth token refresh failed for openai/);
 
-    // Sub-agent store must still have its own stale cred \u2014 no leak.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfileWithoutInlineTokens(subRaw.profiles[profileId], {
-      accountId: "acct-sub",
-    });
-    expect(JSON.stringify(subRaw)).not.toContain("sub-stale");
+    // The failed owner stays fenced, preserving identity without leaking main.
+    const subRaw = readAuthProfileStoreForTest(subAgentDir);
+    const fenced = expectDefined(
+      subRaw.profiles[profileId],
+      "subRaw.profiles[profileId] test invariant",
+    );
+    expectPersistedOpenAICodexProfile(fenced, { accountId: "acct-sub" });
+    expect(fenced.type === "oauth" ? fenced.access : "").toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
+    );
+    expect(fenced.type === "oauth" ? fenced.refresh : "").toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
+    );
+    expect(JSON.stringify(subRaw)).not.toContain("main-foreign-refreshed");
   });
 });

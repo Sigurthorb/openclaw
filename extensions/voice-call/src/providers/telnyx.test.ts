@@ -1,3 +1,4 @@
+// Voice Call tests cover telnyx plugin behavior.
 import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
@@ -249,6 +250,31 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     expect(event?.to).toBe("+15550000000");
   });
 
+  it("uses raw client_state fallback when client_state is malformed base64", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-client-state",
+            event_type: "call.initiated",
+            payload: {
+              call_control_id: "call-fallback",
+              client_state: "call-1@@@",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.callId).toBe("call-1@@@");
+  });
+
   it("reads transcription text from Telnyx transcription_data payloads", () => {
     const provider = new TelnyxProvider({
       apiKey: "KEY123",
@@ -284,6 +310,33 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     expect(event?.isFinal).toBe(false);
     expect(event?.confidence).toBe(0.977219);
   });
+
+  it.each([undefined, "", "   ", "\t\n"])(
+    "does not emit blank transcription payloads %#",
+    (transcript) => {
+      const provider = new TelnyxProvider({
+        apiKey: "KEY123",
+        connectionId: "CONN456",
+        publicKey: undefined,
+      });
+      const result = provider.parseWebhookEvent(
+        createCtx({
+          rawBody: JSON.stringify({
+            data: {
+              id: "evt-blank-transcription",
+              event_type: "call.transcription",
+              payload: {
+                call_control_id: "call-1",
+                transcription_data: { transcript },
+              },
+            },
+          }),
+        }),
+      );
+
+      expect(result.events).toEqual([]);
+    },
+  );
 });
 
 describe("TelnyxProvider answer control", () => {

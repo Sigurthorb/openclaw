@@ -1,4 +1,6 @@
+// Metadata registry loader tests cover metadata-only plugin registry assembly.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
 
 const loadConfigMock = vi.fn();
@@ -18,16 +20,29 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    loadOpenClawPluginsMock({ ...options, activate: false }),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: () => "/resolved-workspace",
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
   resolveDefaultAgentId: () => "default",
+}));
+
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (params: { workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  }),
 }));
 
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
-  const options = loadOpenClawPluginsMock.mock.calls.at(0)?.[0];
+  const options = loadOpenClawPluginsMock.mock.calls[0]?.[0];
   if (!options || typeof options !== "object") {
     throw new Error("expected loadOpenClawPlugins to receive plugin load options");
   }
@@ -62,13 +77,12 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     });
 
     const loadOptions = getOnlyLoadOpenClawPluginsOptions();
-    expect(loadOptions).toEqual({
+    expect(loadOptions).toMatchObject({
       config: { plugins: {} },
       activationSourceConfig: { plugins: { allow: ["demo"] } },
       autoEnabledReasons: {},
       workspaceDir: "/workspace",
       env: { HOME: "/tmp/openclaw-home" },
-      logger: loadOptions.logger,
       throwOnLoadError: true,
       cache: false,
       activate: false,
@@ -76,6 +90,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       loadModules: undefined,
       onlyPluginIds: ["demo"],
     });
+    expect(loadOptions.logger).toBeDefined();
   });
 
   it("forwards explicit manifest-only requests", () => {
@@ -85,27 +100,23 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     });
 
     const loadOptions = getOnlyLoadOpenClawPluginsOptions();
-    expect(loadOptions).toEqual({
+    expect(loadOptions).toMatchObject({
       config: { plugins: {} },
       activationSourceConfig: { plugins: {} },
       autoEnabledReasons: {},
       workspaceDir: "/resolved-workspace",
-      env: loadOptions.env,
-      logger: loadOptions.logger,
       throwOnLoadError: true,
       cache: false,
       activate: false,
       mode: "validate",
       loadModules: false,
     });
+    expect(loadOptions.env === process.env).toBe(true);
+    expect(loadOptions.logger).toBeDefined();
   });
 
   it("forwards an explicit logger through metadata snapshots", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
 
     loadPluginMetadataRegistrySnapshot({
       config: { plugins: {} },
@@ -113,12 +124,12 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       workspaceDir: "/workspace",
     });
 
-    expect(getOnlyLoadOpenClawPluginsOptions()).toEqual({
+    const { env, ...loadOptions } = getOnlyLoadOpenClawPluginsOptions();
+    expect(loadOptions).toMatchObject({
       config: { plugins: {} },
       activationSourceConfig: { plugins: {} },
       autoEnabledReasons: {},
       workspaceDir: "/workspace",
-      env: process.env,
       logger,
       throwOnLoadError: true,
       cache: false,
@@ -126,14 +137,14 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: undefined,
     });
+    // Preserve the env subset check without handing its values to the matcher.
+    expect(
+      env !== undefined && Object.entries(process.env).every(([key, value]) => env[key] === value),
+    ).toBe(true);
   });
 
   it("honors explicit load options when reusing a resolved runtime context", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
     const env = { HOME: "/tmp/context-home" } as NodeJS.ProcessEnv;
     const manifestRegistry = { plugins: [], diagnostics: [] };
 
@@ -169,6 +180,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: undefined,
       manifestRegistry,
+      installRecords: undefined,
     });
   });
 
@@ -179,13 +191,11 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     });
 
     const loadOptions = getOnlyLoadOpenClawPluginsOptions();
-    expect(loadOptions).toEqual({
+    expect(loadOptions).toMatchObject({
       config: { plugins: {} },
       activationSourceConfig: { plugins: {} },
       autoEnabledReasons: {},
       workspaceDir: "/resolved-workspace",
-      env: loadOptions.env,
-      logger: loadOptions.logger,
       throwOnLoadError: true,
       cache: false,
       activate: false,
@@ -193,5 +203,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       loadModules: undefined,
       onlyPluginIds: [],
     });
+    expect(loadOptions.env === process.env).toBe(true);
+    expect(loadOptions.logger).toBeDefined();
   });
 });

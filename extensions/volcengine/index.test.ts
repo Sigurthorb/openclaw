@@ -1,17 +1,32 @@
+// Volcengine tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS,
-  resolveVolcengineToolSchemaCompatPatch,
-} from "./api.js";
+import { VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS } from "./api.js";
 import plugin from "./index.js";
-import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
+import {
+  DOUBAO_CODING_MODEL_CATALOG,
+  DOUBAO_MODEL_CATALOG,
+  VOLCENGINE_PROVIDER_CATALOG,
+} from "./models.js";
 
 describe("volcengine plugin", () => {
+  it("preserves both provider-owned static catalogs and paired ordering", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.catalog?.order).toBe("paired");
+    expect(provider.staticCatalog?.order).toBe("paired");
+    expect(await provider.staticCatalog?.run({} as never)).toEqual({
+      providers: Object.fromEntries(
+        VOLCENGINE_PROVIDER_CATALOG.entries.map(({ id, buildProvider }) => [id, buildProvider()]),
+      ),
+    });
+  });
+
   it("augments the catalog with bundled standard and plan models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
+    expect(provider.auth?.[0]?.starterModel).toBe("volcengine-plan/ark-code-latest");
     const entries = await provider.augmentModelCatalog?.({
       env: process.env,
       entries: [],
@@ -35,6 +50,13 @@ describe("volcengine plugin", () => {
         contextWindow: entry.contextWindow,
       })),
     ]);
+    expect(DOUBAO_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
+      "ark-code-latest",
+      "doubao-seed-2.1-turbo",
+      "glm-5.2",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+    ]);
   });
 
   it("declares its coding provider auth alias in the manifest", () => {
@@ -47,19 +69,31 @@ describe("volcengine plugin", () => {
     });
   });
 
+  it("declares OpenAI-compatible streaming usage support in the manifest", () => {
+    const pluginJson = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
+    );
+
+    expect(pluginJson.providerRequest?.providers).toMatchObject({
+      volcengine: {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
+      "volcengine-plan": {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
+    });
+  });
+
   it("marks direct and coding models with tool schema keyword compat", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.hookAliases).toContain("volcengine-plan");
-    expect(resolveVolcengineToolSchemaCompatPatch()).toEqual({
-      unsupportedToolSchemaKeywords: [...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS],
-    });
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
-      modelId: "kimi-k2.5",
+      modelId: "doubao-seed-2.1-turbo",
       model: {
-        id: "kimi-k2.5",
+        id: "doubao-seed-2.1-turbo",
         provider: "volcengine-plan",
         api: "openai-completions",
         compat: { unsupportedToolSchemaKeywords: ["not"] },
@@ -73,5 +107,8 @@ describe("volcengine plugin", () => {
       "not",
       ...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS,
     ]);
+
+    const normalizedAgain = provider.normalizeResolvedModel?.({ model: normalized } as never);
+    expect(normalizedAgain).toBe(normalized);
   });
 });

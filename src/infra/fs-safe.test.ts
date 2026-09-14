@@ -1,8 +1,10 @@
+// Tests safe filesystem wrappers and protected file-handle behavior.
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
@@ -20,7 +22,7 @@ const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
-  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
@@ -43,6 +45,7 @@ async function runWriteOpenRace(params: {
   runWrite: () => Promise<void>;
 }): Promise<void> {
   await withRealpathSymlinkRebindRace({
+    realpathApi: "native-sync",
     shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
     symlinkPath: params.slotPath,
     symlinkTarget: params.outsideDir,
@@ -149,8 +152,27 @@ describe("fs-safe", () => {
       },
     });
 
-    expect(result.path).toBe(path.join(dir, "artifact.txt"));
+    expect(result).toEqual({ path: path.join(dir, "artifact.txt") });
     await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
+  });
+
+  it.each([
+    ["fallbackFileName", { fallbackFileName: "safe-output.bin" }],
+    ["tempPrefix", { tempPrefix: "safe-output.bin" }],
+  ] as const)("maps %s onto the upstream portable fallback name", async (_label, naming) => {
+    const dir = await tempDirs.make("openclaw-fs-safe-output-name-");
+
+    const result = await writeExternalFileWithinRoot({
+      rootDir: dir,
+      path: "\u0001",
+      ...naming,
+      write: async (tempPath) => {
+        await fs.writeFile(tempPath, "artifact");
+      },
+    });
+
+    expect(result).toEqual({ path: path.join(dir, "safe-output.bin") });
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("artifact");
   });
 
   it("enforces maxBytes", async () => {
@@ -182,6 +204,15 @@ describe("fs-safe", () => {
       await fs.writeFile(originalPath, "inside");
       await fs.writeFile(outsidePath, "outside");
 
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return movedPath;
+        }
+        return await originalRealpath(target);
+      });
+
       const handle = await fs.open(originalPath, "r");
       try {
         await fs.rename(originalPath, movedPath);
@@ -189,8 +220,35 @@ describe("fs-safe", () => {
 
         const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
 
-        await expect(fs.realpath(movedPath)).resolves.toBe(resolved);
+        expect(resolved).toBe(movedPath);
         await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to the io path when /dev/fd realpath does not resolve to the opened file",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const filePath = path.join(root, "inside.txt");
+      await fs.writeFile(filePath, "inside");
+
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return "/dev/fd/inside.txt";
+        }
+        return await originalRealpath(target);
+      });
+
+      const handle = await fs.open(filePath, "r");
+      try {
+        await expect(resolveOpenedFileRealPathForHandle(handle, filePath)).resolves.toBe(
+          await originalRealpath(filePath),
+        );
       } finally {
         await handle.close().catch(() => {});
       }
@@ -301,14 +359,13 @@ describe("fs-safe", () => {
   });
 
   it("rejects setting fs-safe test hooks outside test mode", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("VITEST", undefined);
-
-    expect(() =>
-      __setFsSafeTestHooksForTest({
-        afterPreOpenLstat: () => {},
-      }),
-    ).toThrow("__setFsSafeTestHooksForTest is only available in tests");
+    withEnv({ NODE_ENV: "production", VITEST: undefined }, () => {
+      expect(() =>
+        __setFsSafeTestHooksForTest({
+          afterPreOpenLstat: () => {},
+        }),
+      ).toThrow("__setFsSafeTestHooksForTest is only available in tests");
+    });
   });
 
   it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
@@ -514,6 +571,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
+        realpathApi: "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,
@@ -544,6 +602,7 @@ describe("fs-safe", () => {
       });
 
       await withRealpathSymlinkRebindRace({
+        realpathApi: "native-sync",
         shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot")),
         symlinkPath: slot,
         symlinkTarget: outside,
@@ -592,23 +651,15 @@ describe("fs-safe", () => {
 describe("tilde expansion in file tools", () => {
   it("keeps tilde expansion behavior aligned", async () => {
     const { expandHomePrefix } = await import("./home-dir.js");
-    const originalHome = process.env.HOME;
-    const originalOpenClawHome = process.env.OPENCLAW_HOME;
     const fakeHome = path.resolve(path.sep, "tmp", "fake-home-test");
-    process.env.HOME = fakeHome;
-    process.env.OPENCLAW_HOME = fakeHome;
-    try {
+
+    withEnv({ HOME: fakeHome, OPENCLAW_HOME: fakeHome }, () => {
       const result = expandHomePrefix("~/file.txt");
       expect(path.normalize(result)).toBe(path.join(fakeHome, "file.txt"));
-    } finally {
-      process.env.HOME = originalHome;
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
+    });
 
     const root = await tempDirs.make("openclaw-tilde-test-");
-    process.env.HOME = root;
-    process.env.OPENCLAW_HOME = root;
-    try {
+    await withEnvAsync({ HOME: root, OPENCLAW_HOME: root }, async () => {
       await fs.writeFile(path.join(root, "hello.txt"), "tilde-works");
       const rootFs = await openRoot(root);
       const result = await rootFs.open("~/hello.txt");
@@ -620,10 +671,7 @@ describe("tilde expansion in file tools", () => {
       await rootFs.write("~/output.txt", "tilde-write-works");
       const content = await fs.readFile(path.join(root, "output.txt"), "utf8");
       expect(content).toBe("tilde-write-works");
-    } finally {
-      process.env.HOME = originalHome;
-      process.env.OPENCLAW_HOME = originalOpenClawHome;
-    }
+    });
 
     const outsideRoot = await tempDirs.make("openclaw-tilde-outside-");
     await expectRejectCode(

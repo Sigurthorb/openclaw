@@ -1,8 +1,10 @@
+// Litellm tests cover index plugin behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
 const LITELLM_DEFAULT_MODEL = {
@@ -16,8 +18,8 @@ const LITELLM_DEFAULT_MODEL = {
     cacheRead: 0,
     cacheWrite: 0,
   },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
+  contextWindow: 1_000_000,
+  maxTokens: 128_000,
 };
 
 function registerProvider() {
@@ -48,15 +50,11 @@ describe("litellm plugin", () => {
           litellmApiKey: "litellm-test-key",
           customBaseUrl: "https://litellm.example/v1/",
         },
-        runtime: {
-          error: vi.fn(),
-          exit: vi.fn(),
-          log: vi.fn(),
-        } as never,
+        runtime: createRuntimeSpies(),
         agentDir,
         resolveApiKey,
         toApiKeyCredential,
-      } as never);
+      });
 
       expect(result).toStrictEqual({
         auth: {

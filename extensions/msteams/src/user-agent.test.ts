@@ -1,17 +1,33 @@
+// Msteams tests cover user agent plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the runtime before importing buildUserAgent
-const mockRuntime = {
-  version: "2026.3.19",
-};
+const runtimeMockState = vi.hoisted(() => ({
+  getMSTeamsRuntime: vi.fn(),
+  runtime: { version: "2026.3.19" },
+}));
+const mockRuntime = runtimeMockState.runtime;
 
 vi.mock("./runtime.js", () => ({
-  getMSTeamsRuntime: vi.fn(() => mockRuntime),
+  getMSTeamsRuntime: runtimeMockState.getMSTeamsRuntime,
 }));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }),
+  };
+});
 
 import { fetchGraphJson } from "./graph.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { buildUserAgent, ensureUserAgentHeader, resetUserAgentCache } from "./user-agent.js";
+
+let buildUserAgent: typeof import("./user-agent.js").buildUserAgent;
+let ensureUserAgentHeader: typeof import("./user-agent.js").ensureUserAgentHeader;
 
 function readFirstFetchInit(mockFetch: { mock: { calls: unknown[][] } }): {
   headers: Record<string, string>;
@@ -34,8 +50,9 @@ function readFirstFetchInit(mockFetch: { mock: { calls: unknown[][] } }): {
 }
 
 describe("buildUserAgent", () => {
-  beforeEach(() => {
-    resetUserAgentCache();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ buildUserAgent, ensureUserAgentHeader } = await import("./user-agent.js"));
     vi.mocked(getMSTeamsRuntime).mockReturnValue(mockRuntime as never);
   });
 
@@ -66,10 +83,7 @@ describe("buildUserAgent", () => {
   });
 
   it("sends the generated User-Agent in Graph requests by default", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ value: [] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({ token: "test-token", path: "/groups" });
@@ -81,10 +95,7 @@ describe("buildUserAgent", () => {
   });
 
   it("lets caller headers override the default Graph User-Agent", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ value: [] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({

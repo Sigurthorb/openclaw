@@ -1,14 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Post-install migration tests cover migration prompts and command guidance.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MigrationProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
-const ensureStandaloneMigrationProviderRegistryLoaded = vi.hoisted(() => vi.fn());
-const resolvePluginMigrationProviders = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+const migrationProviders = vi.hoisted(() => vi.fn<() => MigrationProviderPlugin[]>(() => []));
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded,
-  resolvePluginMigrationProviders,
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run(migrationProviders()),
 }));
 
 const resolveManifestContractRuntimePluginResolution = vi.hoisted(() =>
@@ -41,16 +44,14 @@ vi.mock("../commands/migrate.js", () => ({ migrateDefaultCommand }));
 
 import { offerPostInstallMigrations } from "./setup.post-install-migration.js";
 
-type ProviderMock = {
-  id: string;
-  label: string;
-  detect: ReturnType<typeof vi.fn>;
-};
+const originalStdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
-function buildProvider(overrides: Partial<ProviderMock> = {}): ProviderMock {
+function buildProvider(overrides: Partial<MigrationProviderPlugin> = {}): MigrationProviderPlugin {
   return {
     id: "codex",
     label: "Codex",
+    plan: vi.fn<MigrationProviderPlugin["plan"]>(),
+    apply: vi.fn<MigrationProviderPlugin["apply"]>(),
     detect: vi.fn(async () => ({ found: true, source: "/home/user/.codex" })),
     ...overrides,
   };
@@ -65,8 +66,8 @@ function setOwnership(providerId: string, owningPluginIds: string[]): void {
   });
 }
 
-function setProviders(providers: ProviderMock[]): void {
-  resolvePluginMigrationProviders.mockReturnValue(providers as unknown[]);
+function setProviders(providers: MigrationProviderPlugin[]): void {
+  migrationProviders.mockReturnValue(providers);
 }
 
 function setTTY(isTTY: boolean): void {
@@ -74,12 +75,13 @@ function setTTY(isTTY: boolean): void {
 }
 
 function buildBaseArgs(overrides: {
+  config?: OpenClawConfig;
   prompter?: WizardPrompter;
   installedPluginIds?: readonly string[];
   nonInteractive?: boolean;
 }) {
   return {
-    config: {} as OpenClawConfig,
+    config: overrides.config ?? ({} as OpenClawConfig),
     runtime: createNonExitingRuntime(),
     prompter: overrides.prompter ?? createWizardPrompter(),
     installedPluginIds: overrides.installedPluginIds ?? ["codex"],
@@ -91,8 +93,7 @@ describe("offerPostInstallMigrations", () => {
   beforeEach(() => {
     // clearAllMocks only resets call history; reset the implementations each
     // test would customize so prior cases don't leak across this suite.
-    ensureStandaloneMigrationProviderRegistryLoaded.mockReset();
-    resolvePluginMigrationProviders.mockReset().mockReturnValue([]);
+    migrationProviders.mockReset().mockReturnValue([]);
     resolveManifestContractRuntimePluginResolution.mockReset().mockReturnValue({
       pluginIds: [],
       bundledCompatPluginIds: [],
@@ -108,10 +109,28 @@ describe("offerPostInstallMigrations", () => {
     setTTY(true);
   });
 
+  afterEach(() => {
+    if (originalStdinIsTTYDescriptor) {
+      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTYDescriptor);
+    } else {
+      delete (process.stdin as Partial<typeof process.stdin>).isTTY;
+    }
+  });
+
+  afterAll(() => {
+    expect(Object.getOwnPropertyDescriptor(process.stdin, "isTTY")).toEqual(
+      originalStdinIsTTYDescriptor,
+    );
+  });
+
   it("returns early when no plugins were installed in this onboarding step", async () => {
-    await offerPostInstallMigrations(buildBaseArgs({ installedPluginIds: [] }));
-    expect(resolvePluginMigrationProviders).not.toHaveBeenCalled();
+    const config = { plugins: { entries: { codex: { enabled: true } } } } as OpenClawConfig;
+    const result = await offerPostInstallMigrations(
+      buildBaseArgs({ config, installedPluginIds: [] }),
+    );
+    expect(migrationProviders).not.toHaveBeenCalled();
     expect(migrateDefaultCommand).not.toHaveBeenCalled();
+    expect(result.config).toBe(config);
   });
 
   it("skips providers not owned by any plugin in installedPluginIds", async () => {
@@ -165,12 +184,113 @@ describe("offerPostInstallMigrations", () => {
       confirm: confirm as WizardPrompter["confirm"],
     });
 
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
+    const result = await offerPostInstallMigrations(buildBaseArgs({ prompter }));
 
     expect(confirm).toHaveBeenCalledOnce();
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
-    expect(migrateDefaultCommand).toHaveBeenCalledWith(expect.anything(), { provider: "codex" });
+    expect(migrateDefaultCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        provider: "codex",
+        configPatchMode: "return",
+        suppressPlanLog: true,
+      }),
+      provider,
+    );
+    expect(result.config).toEqual({});
+  });
+
+  it("returns config patched from migrated config items without mutating the input config", async () => {
+    const provider = buildProvider();
+    setProviders([provider]);
+    setOwnership("codex", ["codex"]);
+    const inputConfig = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: { sandbox: "workspace-write" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    migrateDefaultCommand.mockResolvedValueOnce({
+      providerId: "codex",
+      source: "/home/user/.codex",
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 1,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        {
+          id: "config:codex-plugins",
+          kind: "config",
+          action: "merge",
+          status: "migrated",
+          details: {
+            path: ["plugins", "entries", "codex"],
+            value: {
+              enabled: true,
+              config: {
+                codexPlugins: {
+                  enabled: true,
+                  allow_destructive_actions: true,
+                  plugins: {
+                    gmail: {
+                      enabled: true,
+                      marketplaceName: "openai-curated",
+                      pluginName: "gmail",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    } as never);
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
+    });
+
+    const result = await offerPostInstallMigrations(
+      buildBaseArgs({ config: inputConfig, prompter }),
+    );
+
+    expect(migrateDefaultCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        configOverride: inputConfig,
+        configPatchMode: "return",
+      }),
+      provider,
+    );
+    expect(result.config).not.toBe(inputConfig);
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({
+      appServer: { sandbox: "workspace-write" },
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: true,
+        plugins: {
+          gmail: {
+            enabled: true,
+            marketplaceName: "openai-curated",
+            pluginName: "gmail",
+          },
+        },
+      },
+    });
+    expect(inputConfig.plugins?.entries?.codex?.config).toEqual({
+      appServer: { sandbox: "workspace-write" },
+    });
   });
 
   it("does not invoke migrateDefaultCommand when the user declines", async () => {
@@ -220,7 +340,9 @@ describe("offerPostInstallMigrations", () => {
       confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
     });
 
-    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter }))).resolves.toBeUndefined();
+    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter }))).resolves.toEqual({
+      config: {},
+    });
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
   });
 
